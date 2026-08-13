@@ -1,0 +1,129 @@
+name: Sync SOOP Kit store version
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-soop-kit-store-version
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.CWS_SERVICE_ACCOUNT_JSON }}
+          create_credentials_file: false
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+
+      - name: Read the published Web Store version
+        id: sync
+        env:
+          CWS_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+          CWS_ITEM_ID: fmknkphflinmcpeafoogdhcbldpodlef
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          output_path = Path(os.environ['GITHUB_OUTPUT'])
+
+          def set_output(name, value):
+              with output_path.open('a', encoding='utf-8') as output:
+                  output.write(f'{name}={value}\n')
+
+          set_output('changed', 'false')
+
+          publisher_id = os.environ.get('CWS_PUBLISHER_ID', '').strip()
+          item_id = os.environ.get('CWS_ITEM_ID', '').strip()
+          access_token = os.environ.get('CWS_ACCESS_TOKEN', '').strip()
+          if not publisher_id or not item_id or not access_token:
+              raise SystemExit('Chrome Web Store API configuration is incomplete.')
+
+          resource = (
+              'https://chromewebstore.googleapis.com/v2/publishers/'
+              f'{urllib.parse.quote(publisher_id, safe="")}/items/'
+              f'{urllib.parse.quote(item_id, safe="")}:fetchStatus'
+          )
+          request = urllib.request.Request(
+              resource,
+              headers={'Authorization': f'Bearer {access_token}'},
+          )
+
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  status = json.load(response)
+          except urllib.error.HTTPError as error:
+              detail = error.read().decode('utf-8', errors='replace')
+              raise SystemExit(f'Chrome Web Store API returned HTTP {error.code}: {detail}')
+
+          published = status.get('publishedItemRevisionStatus') or {}
+          if published.get('state') != 'PUBLISHED':
+              print('No publicly published revision is available yet.')
+              sys.exit(0)
+
+          fully_deployed_versions = {
+              channel.get('crxVersion')
+              for channel in published.get('distributionChannels') or []
+              if channel.get('deployPercentage') == 100 and channel.get('crxVersion')
+          }
+          if len(fully_deployed_versions) != 1:
+              print('The published revision is not deployed to 100% of users yet.')
+              sys.exit(0)
+
+          store_version = fully_deployed_versions.pop()
+          if not re.fullmatch(r'\d+(?:\.\d+){1,3}', store_version):
+              raise SystemExit(f'Invalid Chrome extension version: {store_version!r}')
+
+          target = Path('soop-kit-store-version.json')
+          current = json.loads(target.read_text(encoding='utf-8')) if target.exists() else {}
+          if current.get('storeVersion') == store_version:
+              print(f'storeVersion is already {store_version}.')
+              sys.exit(0)
+
+          target.write_text(
+              json.dumps({'storeVersion': store_version}, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          set_output('changed', 'true')
+          set_output('version', store_version)
+          print(f'Updated storeVersion to {store_version}.')
+          PY
+
+      - name: Commit the version update
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          STORE_VERSION: ${{ steps.sync.outputs.version }}
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- soop-kit-store-version.json
+          git commit -m "Sync Chrome Web Store version to ${STORE_VERSION}"
+          git pull --rebase origin main
+          git push origin HEAD:main
