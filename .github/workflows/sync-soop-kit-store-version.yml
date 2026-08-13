@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
           ref: main
@@ -40,7 +40,7 @@ jobs:
       - name: Authenticate to Google Cloud
         if: steps.config.outputs.configured == 'true'
         id: auth
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           credentials_json: ${{ secrets.CWS_SERVICE_ACCOUNT_JSON }}
           create_credentials_file: false
