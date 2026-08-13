@@ -24,7 +24,21 @@ jobs:
           fetch-depth: 0
           ref: main
 
+      - name: Check API credentials
+        id: config
+        env:
+          SERVICE_ACCOUNT_JSON: ${{ secrets.CWS_SERVICE_ACCOUNT_JSON }}
+        shell: bash
+        run: |
+          if [[ -n "${SERVICE_ACCOUNT_JSON}" ]]; then
+            echo 'configured=true' >> "${GITHUB_OUTPUT}"
+          else
+            echo 'configured=false' >> "${GITHUB_OUTPUT}"
+            echo '::notice::CWS_SERVICE_ACCOUNT_JSON is not configured; skipping sync.'
+          fi
+
       - name: Authenticate to Google Cloud
+        if: steps.config.outputs.configured == 'true'
         id: auth
         uses: google-github-actions/auth@v3
         with:
@@ -34,6 +48,7 @@ jobs:
           access_token_scopes: https://www.googleapis.com/auth/chromewebstore
 
       - name: Read the published Web Store version
+        if: steps.config.outputs.configured == 'true'
         id: sync
         env:
           CWS_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
