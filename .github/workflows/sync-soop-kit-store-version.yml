@@ -2,7 +2,7 @@ name: Sync SOOP Kit store version
 
 on:
   schedule:
-    - cron: '17,37,57 * * * *'
+    - cron: '7,37 * * * *'
   workflow_dispatch:
 
 permissions:
